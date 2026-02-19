@@ -1,0 +1,11 @@
+[tools]
+"go:github.com/nats-io/nats-server/v2" = "latest"
+
+[tasks.nats]
+run = "nats-server --jetstream --store_dir ./.cache/"
+
+[tasks.main]
+run = "go run ./internal/main.go"
+
+[tasks.test]
+run = "go test ./internal/... --count=1"
