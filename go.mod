@@ -14,6 +14,6 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/synadia-io/orbit.go/jetstreamext v0.1.0 // indirect
 	github.com/synadia-io/orbit.go/natsext v0.1.1 // indirect
-	golang.org/x/crypto v0.42.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
 )
