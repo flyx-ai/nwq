@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"strconv"
 	"time"
 
@@ -14,23 +13,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-type RetryPolicy struct {
-	NumRetries int
-	// Backoff is a function that takes the current attempt number (starting from 0) and returns the duration to wait before the next retry.
-	Backoff func(attempt int) time.Duration
-}
-
-var DefaultRetryPolicy = RetryPolicy{
-	NumRetries: 5,
-	// Exponential backoff with jitter
-	Backoff: func(attempt int) time.Duration {
-		base := time.Second
-		backoff := base * (1 << attempt) // Exponential backoff
-		jitter := time.Duration(float64(backoff) * 0.1 * (0.5 - rand.Float64()))
-		return backoff + jitter
-	},
-}
 
 type WorkerTask interface {
 	Handle(ctx context.Context, msg jetstream.Msg) error
@@ -43,29 +25,31 @@ type Task[Message any] struct {
 	name                 string
 	version              string
 	handler              func(ctx context.Context, msg Message) error
-	retry                RetryPolicy
-	timeout              time.Duration
 	isWorkflowCompletion bool
+	to                   taskOptions
 }
 
-func NewTask[Message any](name string, version string, handler func(ctx context.Context, msg Message) error, timeout time.Duration) Task[Message] {
-	return Task[Message]{
+func NewTask[Message any](
+	name string,
+	version string,
+	handler func(ctx context.Context, msg Message) error,
+	options ...TaskOption,
+) Task[Message] {
+	task := Task[Message]{
 		name:    name,
 		version: version,
 		handler: handler,
-		retry:   DefaultRetryPolicy,
-		timeout: timeout,
+		to: taskOptions{
+			retry:   DefaultRetryPolicy,
+			timeout: 30 * time.Second,
+		},
 	}
-}
 
-func NewTaskWithRetry[Message any](name string, version string, handler func(ctx context.Context, msg Message) error, retry RetryPolicy, timeout time.Duration) Task[Message] {
-	return Task[Message]{
-		name:    name,
-		version: version,
-		handler: handler,
-		retry:   retry,
-		timeout: timeout,
+	for _, option := range options {
+		option.apply(&task.to)
 	}
+
+	return task
 }
 
 func (t Task[Message]) Name() string {
@@ -121,7 +105,7 @@ func (t Task[Message]) Run(ctx context.Context, msg Message) error {
 	message := nats.NewMsg(t.MessageSubject())
 	message.Data = marshalledInput
 	message.Header.Set("X-NWQ-Workflow-ID", workflowID)
-	message.Header.Set("X-NWQ-Task-Timeout", strconv.FormatInt(t.timeout.Nanoseconds(), 10))
+	message.Header.Set("X-NWQ-Task-Timeout", strconv.FormatInt(int64(t.to.timeout), 10))
 
 	_, err = client.JS.PublishMsg(ctx, message)
 	if err != nil {
@@ -198,7 +182,7 @@ func (t Task[Message]) Handle(ctx context.Context, msg jetstream.Msg) error {
 
 		slog.Error("task handler error", "error", err, "workflowID", workflowID, "attempt", numDelivered)
 
-		if uint64(t.retry.NumRetries) > 0 && numDelivered > uint64(t.retry.NumRetries) {
+		if uint64(t.to.retry.NumRetries) > 0 && numDelivered > uint64(t.to.retry.NumRetries) {
 			err := msg.Term()
 			if err != nil {
 				return fmt.Errorf("failed to terminate message after exceeding retry limit for attempt %d: %w", numDelivered, err)
@@ -218,7 +202,7 @@ func (t Task[Message]) Handle(ctx context.Context, msg jetstream.Msg) error {
 				}
 			}
 		} else {
-			err = msg.NakWithDelay(t.retry.Backoff(int(numDelivered - 1)))
+			err = msg.NakWithDelay(t.to.retry.Backoff(int(numDelivered - 1)))
 			if err != nil {
 				return fmt.Errorf("failed to nack message for attempt %d: %w", numDelivered, err)
 			}

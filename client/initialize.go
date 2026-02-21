@@ -49,6 +49,7 @@ func initialize(ctx context.Context, nc *nats.Conn, numReplicas int) error {
 		Discard:            jetstream.DiscardNew,
 		Storage:            jetstream.FileStorage,
 		Replicas:           numReplicas,
+		Duplicates:         2 * time.Minute,
 		AllowDirect:        true,
 		AllowMsgTTL:        true,
 		AllowAtomicPublish: true,

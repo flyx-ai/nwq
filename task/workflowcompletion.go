@@ -16,10 +16,10 @@ type workflowCompletionMessage struct {
 	WorkflowID string `json:"workflow_id"`
 }
 
-var WorkflowCompletionTask = Task[workflowCompletionMessage]{
-	name:    "workflow-completion",
-	version: "v1",
-	handler: func(ctx context.Context, input workflowCompletionMessage) error {
+var WorkflowCompletionTask = NewTask(
+	"workflow-completion",
+	"v1",
+	func(ctx context.Context, input workflowCompletionMessage) error {
 		keyLister, err := client.WorkflowKV.ListKeysFiltered(ctx, input.WorkflowID+".>")
 		if err != nil {
 			return fmt.Errorf("failed to list keys in WorkflowKV: %w", err)
@@ -80,7 +80,7 @@ var WorkflowCompletionTask = Task[workflowCompletionMessage]{
 
 		return nil
 	},
-	timeout:              time.Minute * 5,
-	retry:                DefaultRetryPolicy,
-	isWorkflowCompletion: true,
-}
+	WithTimeout(time.Minute*5),
+	WithRetry(DefaultRetryPolicy),
+	withWorkflowCompletion(),
+)

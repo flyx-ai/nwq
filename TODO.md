@@ -6,3 +6,4 @@
 + Deduplication/Task Caching
 + Task run shortcut while executing
 + DLQ
++ core nats workflows
