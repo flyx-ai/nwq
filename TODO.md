@@ -3,7 +3,6 @@
 + Object Store caching
 + More Traces
 + Scheduled Tasks
-+ Deduplication/Task Caching
-+ Task run shortcut while executing
++ Task run shortcut while executing (probably using leaf nodes)
 + DLQ
 + core nats workflows

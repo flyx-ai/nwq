@@ -61,6 +61,11 @@ var DoThingTask = task.NewTask("do-thing", "v1", func(ctx context.Context, msg D
 		return fmt.Errorf("failed to run do other thing task: %w", err)
 	}
 
+	err = DoOtherThingTask.Run(ctx, DoOtherThingMessage{ThingID: msg.ThingID, OtherThingID: "789"})
+	if err != nil {
+		return fmt.Errorf("failed to run do other thing task: %w", err)
+	}
+
 	return nil
 	// The retry can be configured on a per task basis, and can be set to any duration. The default is 5 retries with exponential backoff and jitter, starting at 1 second.
 }, task.WithTimeout(time.Minute))
@@ -95,4 +100,4 @@ var DoOtherThingTask = task.NewTask("do-other-thing", "v1", func(ctx context.Con
 	slog.Info("got kv", "value", string(kvValue))
 
 	return nil
-}, task.WithTimeout(time.Minute))
+}, task.WithTimeout(time.Minute), task.WithDedup())

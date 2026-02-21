@@ -3,12 +3,16 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/flyx-ai/nwq/client"
+	"github.com/flyx-ai/nwq/task/taskinfo"
+	"github.com/flyx-ai/nwq/workflow"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -62,17 +66,6 @@ func (t Task[Message]) Version() string {
 
 var _ WorkerTask = (*Task[any])(nil)
 
-type workflowIDContextKey struct{}
-
-func WithWorkflowID(ctx context.Context, workflowID string) context.Context {
-	return context.WithValue(ctx, workflowIDContextKey{}, workflowID)
-}
-
-func GetWorkflowID(ctx context.Context) (string, bool) {
-	workflowID, ok := ctx.Value(workflowIDContextKey{}).(string)
-	return workflowID, ok
-}
-
 func counterSubject(workflowID string) string {
 	return "nwq.counters." + workflowID
 }
@@ -81,13 +74,25 @@ func (t Task[Message]) MessageSubject() string {
 	return "nwq.messages." + t.version + t.name
 }
 
+func (t Task[Message]) getHash(workflowID string, rawMsg []byte) uint64 {
+	hash := xxhash.New()
+	_, _ = hash.Write([]byte(workflowID))
+	_, _ = hash.Write([]byte("NWQ_SEP"))
+	_, _ = hash.Write([]byte(t.name))
+	_, _ = hash.Write([]byte("NWQ_SEP"))
+	_, _ = hash.Write([]byte(t.version))
+	_, _ = hash.Write([]byte("NWQ_SEP"))
+	_, _ = hash.Write(rawMsg)
+	return hash.Sum64()
+}
+
 func (t Task[Message]) Run(ctx context.Context, msg Message) error {
 	slog.Info("running task", "taskName", t.name)
 
-	workflowID, ok := GetWorkflowID(ctx)
+	workflowID, ok := taskinfo.GetWorkflowID(ctx)
 	if !ok {
 		workflowID = uuid.New().String()
-		ctx = WithWorkflowID(ctx, workflowID)
+		ctx = taskinfo.WithWorkflowID(ctx, workflowID)
 	}
 
 	if !t.isWorkflowCompletion {
@@ -106,6 +111,12 @@ func (t Task[Message]) Run(ctx context.Context, msg Message) error {
 	message.Data = marshalledInput
 	message.Header.Set("X-NWQ-Workflow-ID", workflowID)
 	message.Header.Set("X-NWQ-Task-Timeout", strconv.FormatInt(int64(t.to.timeout), 10))
+
+	if t.to.dedup {
+		dedupIDRaw := t.getHash(workflowID, marshalledInput)
+		dedupID := strconv.FormatUint(dedupIDRaw, 16)
+		message.Header.Set("Nats-Msg-Id", dedupID)
+	}
 
 	_, err = client.JS.PublishMsg(ctx, message)
 	if err != nil {
@@ -128,6 +139,30 @@ func (t Task[Message]) Handle(ctx context.Context, msg jetstream.Msg) error {
 	workflowID := msg.Headers().Get("X-NWQ-Workflow-ID")
 	if workflowID == "" {
 		return fmt.Errorf("missing workflow ID in message header")
+	}
+
+	ctx = taskinfo.WithWorkflowID(ctx, workflowID)
+
+	if t.to.dedup {
+		dedupIDRaw := t.getHash(workflowID, msg.Data())
+		dedupID := strconv.FormatUint(dedupIDRaw, 16)
+
+		err := workflow.CreateKV(ctx, "NWQ_DEDUP_"+dedupID, nil)
+		if errors.Is(err, jetstream.ErrKeyExists) {
+			slog.Info(
+				"duplicate message detected, acknowledging without processing",
+				"workflowID",
+				workflowID,
+				"dedupID",
+				dedupID,
+			)
+			if err := msg.Ack(); err != nil {
+				return fmt.Errorf("failed to ack duplicate message: %w", err)
+			}
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("failed to create deduplication key: %w", err)
+		}
 	}
 
 	taskTimeoutRaw := msg.Headers().Get("X-NWQ-Task-Timeout")
@@ -163,8 +198,6 @@ func (t Task[Message]) Handle(ctx context.Context, msg jetstream.Msg) error {
 			}
 		}
 	}()
-
-	ctx = WithWorkflowID(ctx, workflowID)
 
 	var msgInput Message
 	err := json.Unmarshal(msg.Data(), &msgInput)

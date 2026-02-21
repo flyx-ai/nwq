@@ -26,6 +26,7 @@ type taskOptions struct {
 	retry                RetryPolicy
 	timeout              time.Duration
 	isWorkflowCompletion bool
+	dedup                bool
 }
 
 type TaskOption interface {
@@ -64,4 +65,14 @@ func (o taskOptionWorkflowCompletion) apply(t *taskOptions) {
 
 func withWorkflowCompletion() TaskOption {
 	return taskOptionWorkflowCompletion{}
+}
+
+type taskOptionDedup struct{}
+
+func (o taskOptionDedup) apply(t *taskOptions) {
+	t.dedup = true
+}
+
+func WithDedup() TaskOption {
+	return taskOptionDedup{}
 }

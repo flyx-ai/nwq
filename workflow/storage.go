@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/flyx-ai/nwq/client"
-	"github.com/flyx-ai/nwq/task"
+	"github.com/flyx-ai/nwq/task/taskinfo"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -16,7 +16,7 @@ func StoreObject(ctx context.Context, key string, reader io.Reader) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	workflowID, ok := task.GetWorkflowID(ctx)
+	workflowID, ok := taskinfo.GetWorkflowID(ctx)
 	if !ok {
 		return fmt.Errorf("workflow ID not found in context")
 	}
@@ -56,7 +56,7 @@ func StoreObject(ctx context.Context, key string, reader io.Reader) error {
 }
 
 func GetObject(ctx context.Context, key string) (jetstream.ObjectResult, error) {
-	workflowID, ok := task.GetWorkflowID(ctx)
+	workflowID, ok := taskinfo.GetWorkflowID(ctx)
 	if !ok {
 		return nil, fmt.Errorf("workflow ID not found in context")
 	}
@@ -70,7 +70,7 @@ func GetObject(ctx context.Context, key string) (jetstream.ObjectResult, error) 
 }
 
 func StoreKV(ctx context.Context, key string, value []byte) error {
-	workflowID, ok := task.GetWorkflowID(ctx)
+	workflowID, ok := taskinfo.GetWorkflowID(ctx)
 	if !ok {
 		return fmt.Errorf("workflow ID not found in context")
 	}
@@ -84,7 +84,7 @@ func StoreKV(ctx context.Context, key string, value []byte) error {
 }
 
 func GetKV(ctx context.Context, key string) ([]byte, error) {
-	workflowID, ok := task.GetWorkflowID(ctx)
+	workflowID, ok := taskinfo.GetWorkflowID(ctx)
 	if !ok {
 		return nil, fmt.Errorf("workflow ID not found in context")
 	}
@@ -95,4 +95,18 @@ func GetKV(ctx context.Context, key string) ([]byte, error) {
 	}
 
 	return entry.Value(), nil
+}
+
+func CreateKV(ctx context.Context, key string, value []byte) error {
+	workflowID, ok := taskinfo.GetWorkflowID(ctx)
+	if !ok {
+		return fmt.Errorf("workflow ID not found in context")
+	}
+
+	_, err := client.WorkflowKV.Create(ctx, workflowID+"."+key, value)
+	if err != nil {
+		return fmt.Errorf("failed to create key-value pair in WorkflowKV: %w", err)
+	}
+
+	return nil
 }
