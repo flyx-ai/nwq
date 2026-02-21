@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flyx-ai/nwq/client"
+	"github.com/flyx-ai/nwq/cron"
 	"github.com/flyx-ai/nwq/task"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -16,10 +17,13 @@ type Worker struct {
 	tasks           []task.WorkerTask
 	consumers       []jetstream.Consumer
 	consumeContexts []jetstream.ConsumeContext
+	scheduler       *cron.Scheduler
 }
 
 func NewWorker() *Worker {
-	worker := &Worker{}
+	worker := &Worker{
+		scheduler: cron.NewScheduler(),
+	}
 	worker.RegisterTask(task.WorkflowCompletionTask)
 	return worker
 }
@@ -85,10 +89,22 @@ func (w *Worker) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start worker: %w", fmt.Errorf("%v", startErrors))
 	}
 
+	if err := w.scheduler.AddStaticCrons(w.tasks); err != nil {
+		return fmt.Errorf("failed to register static crons: %w", err)
+	}
+
+	if err := w.scheduler.WatchDynamicCrons(ctx); err != nil {
+		return fmt.Errorf("failed to start dynamic cron watcher: %w", err)
+	}
+
+	w.scheduler.Start()
+
 	return nil
 }
 
 func (w *Worker) Stop(ctx context.Context) {
+	w.scheduler.Stop()
+
 	wg := sync.WaitGroup{}
 	for _, consumeCtx := range w.consumeContexts {
 		wg.Go(func() {
