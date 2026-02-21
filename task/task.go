@@ -142,6 +142,7 @@ func (t Task[Message]) Handle(ctx context.Context, msg jetstream.Msg) error {
 		slog.Warn("missing task timeout in message header, using default")
 	}
 
+	// FIXME: see why the heartbeat needs to be sent initially
 	if err := msg.InProgress(); err != nil {
 		return fmt.Errorf("failed to signal in-progress for message: %w", err)
 	}
