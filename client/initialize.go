@@ -20,6 +20,7 @@ var (
 	Counter             counters.Counter
 	WorkflowObjectStore jetstream.ObjectStore
 	WorkflowKV          jetstream.KeyValue
+	CronKV              jetstream.KeyValue
 )
 
 func Initialize(ctx context.Context, nc *nats.Conn) error {
@@ -47,6 +48,7 @@ func initialize(ctx context.Context, nc *nats.Conn, numReplicas int) error {
 		Subjects:           []string{"nwq.messages.>"},
 		Retention:          jetstream.InterestPolicy,
 		Discard:            jetstream.DiscardNew,
+		Duplicates:         2 * time.Minute,
 		Storage:            jetstream.FileStorage,
 		Replicas:           numReplicas,
 		AllowDirect:        true,
@@ -91,6 +93,16 @@ func initialize(ctx context.Context, nc *nats.Conn, numReplicas int) error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create or update WorkflowKV: %w", err)
+	}
+
+	CronKV, err = JS.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:      "nwq-crons",
+		Description: "Cron trigger definitions for NWQ tasks",
+		Storage:     jetstream.FileStorage,
+		Replicas:    numReplicas,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create or update CronKV: %w", err)
 	}
 
 	Counter, err = counters.NewCounterFromStream(JS, CounterStream)

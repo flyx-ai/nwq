@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats.go v1.48.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/synadia-io/orbit.go/counters v0.1.0
 )
 

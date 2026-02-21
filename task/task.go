@@ -37,6 +37,8 @@ type WorkerTask interface {
 	Name() string
 	Version() string
 	MessageSubject() string
+	OnCrons() []string
+	Timeout() time.Duration
 }
 
 type Task[Message any] struct {
@@ -45,6 +47,7 @@ type Task[Message any] struct {
 	handler              func(ctx context.Context, msg Message) error
 	retry                RetryPolicy
 	timeout              time.Duration
+	onCrons              []string
 	isWorkflowCompletion bool
 }
 
@@ -68,12 +71,31 @@ func NewTaskWithRetry[Message any](name string, version string, handler func(ctx
 	}
 }
 
+func NewCronTask[Message any](name string, version string, handler func(ctx context.Context, msg Message) error, crons []string, timeout time.Duration) Task[Message] {
+	return Task[Message]{
+		name:    name,
+		version: version,
+		handler: handler,
+		retry:   DefaultRetryPolicy,
+		timeout: timeout,
+		onCrons: crons,
+	}
+}
+
 func (t Task[Message]) Name() string {
 	return t.name
 }
 
 func (t Task[Message]) Version() string {
 	return t.version
+}
+
+func (t Task[Message]) OnCrons() []string {
+	return t.onCrons
+}
+
+func (t Task[Message]) Timeout() time.Duration {
+	return t.timeout
 }
 
 var _ WorkerTask = (*Task[any])(nil)
