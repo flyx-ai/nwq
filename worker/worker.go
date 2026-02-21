@@ -43,9 +43,16 @@ func (w *Worker) Start(ctx context.Context) error {
 			AckWait:       30 * time.Second,
 			// this is handled internally
 			MaxDeliver: -1,
-			// FIXME: see what's causing the consumer to retry when it did not fail
 			// since we handle heartbeat internally, this should not be hit, but we set it just in case
-			// BackOff:       []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second},
+			// the first value must be >=30 seconds to have a sensible AckWait time
+			BackOff: []time.Duration{
+				30 * time.Second,
+				1 * time.Minute,
+				5 * time.Minute,
+				30 * time.Minute,
+				1 * time.Hour,
+				24 * time.Hour,
+			},
 			FilterSubject: t.MessageSubject(),
 			ReplayPolicy:  jetstream.ReplayInstantPolicy,
 		})
