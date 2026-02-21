@@ -41,10 +41,7 @@ func (w *Worker) Start(ctx context.Context) error {
 			DeliverPolicy: jetstream.DeliverAllPolicy,
 			AckPolicy:     jetstream.AckExplicitPolicy,
 			AckWait:       30 * time.Second,
-			// this is handled internally
-			MaxDeliver: -1,
-			// since we handle heartbeat internally, this should not be hit, but we set it just in case
-			BackOff:       []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second},
+			MaxDeliver:    -1,
 			FilterSubject: t.MessageSubject(),
 			ReplayPolicy:  jetstream.ReplayInstantPolicy,
 		})

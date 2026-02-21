@@ -158,6 +158,10 @@ func (t Task[Message]) Handle(ctx context.Context, msg jetstream.Msg) error {
 		slog.Warn("missing task timeout in message header, using default")
 	}
 
+	if err := msg.InProgress(); err != nil {
+		return fmt.Errorf("failed to signal in-progress for message: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeoutCause(ctx, taskTimeout, fmt.Errorf("task %s timed out after %s", t.Name(), taskTimeout))
 	defer cancel()
 
