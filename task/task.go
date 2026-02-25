@@ -71,7 +71,11 @@ func counterSubject(workflowID string) string {
 }
 
 func (t Task[Message]) MessageSubject() string {
-	return "nwq.messages." + t.version + t.name
+	return "nwq.messages." + t.version + "." + t.name
+}
+
+func (t Task[Message]) ScheduleSubject() string {
+	return "nwq.schedules." + t.version + "." + t.name
 }
 
 func (t Task[Message]) getHash(workflowID string, rawMsg []byte) uint64 {
@@ -126,6 +130,101 @@ func (t Task[Message]) Run(ctx context.Context, msg Message) error {
 	return nil
 }
 
+var ErrDuplicateScheduledTask = fmt.Errorf("duplicate scheduled task")
+
+func (t Task[Message]) Schedule(
+	ctx context.Context,
+	msg Message,
+	schedule string,
+	dedupID string,
+	overwriteExisting bool,
+) error {
+	slog.Info("running scheduled task", "taskName", t.name)
+
+	if dedupID == "" {
+		dedupID = t.ScheduleSubject()
+	}
+
+	dedupKey := "NWQ_SCHEDULED_" + dedupID
+
+	marshalledInput, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	message := nats.NewMsg(t.ScheduleSubject())
+	message.Data = marshalledInput
+	message.Header.Set("X-NWQ-Task-Timeout", strconv.FormatInt(int64(t.to.timeout), 10))
+	message.Header.Set("Nats-Schedule", schedule)
+	message.Header.Set("Nats-Schedule-Target", t.MessageSubject())
+
+	_, err = client.WorkflowKV.Create(ctx, dedupKey, nil)
+	if errors.Is(err, jetstream.ErrKeyExists) {
+		if overwriteExisting {
+			slog.Info(
+				"scheduled task with same deduplication ID already exists, purging existing messages and overwriting",
+				"dedupKey",
+				dedupKey,
+			)
+			dedupKeyLock := dedupKey + "_LOCK"
+			for {
+				_, err := client.WorkflowKV.Create(ctx, dedupKeyLock, nil, jetstream.KeyTTL(time.Minute))
+				if errors.Is(err, jetstream.ErrKeyExists) {
+					continue
+				}
+
+				defer func() {
+					err := client.WorkflowKV.Purge(ctx, dedupKeyLock)
+					if err != nil {
+						slog.Error(
+							"failed to release lock for scheduled task deduplication key",
+							"error",
+							err,
+							"dedupKeyLock",
+							dedupKeyLock,
+						)
+					}
+				}()
+
+				err = client.TaskStream.Purge(ctx, jetstream.WithPurgeSubject(t.ScheduleSubject()))
+				if err != nil {
+					return fmt.Errorf("failed to purge existing scheduled task messages: %w", err)
+				}
+
+				slog.Info(
+					"publishing new scheduled task message after purging existing messages",
+					"dedupKey",
+					dedupKey,
+				)
+
+				_, err = client.JS.PublishMsg(ctx, message)
+				if err != nil {
+					return fmt.Errorf("failed to publish task message: %w", err)
+				}
+
+				return nil
+			}
+		} else {
+			return ErrDuplicateScheduledTask
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to create deduplication key for scheduled task: %w", err)
+	}
+
+	slog.Info(
+		"publishing scheduled task message",
+		"dedupKey",
+		dedupKey,
+	)
+
+	_, err = client.JS.PublishMsg(ctx, message)
+	if err != nil {
+		return fmt.Errorf("failed to publish task message: %w", err)
+	}
+
+	return nil
+}
+
 func (t Task[Message]) handleWorkflowCompletion(ctx context.Context, workflowID string) error {
 	err := WorkflowCompletionTask.Run(ctx, workflowCompletionMessage{WorkflowID: workflowID})
 	if err != nil {
@@ -137,11 +236,46 @@ func (t Task[Message]) handleWorkflowCompletion(ctx context.Context, workflowID 
 
 func (t Task[Message]) Handle(ctx context.Context, msg jetstream.Msg) error {
 	workflowID := msg.Headers().Get("X-NWQ-Workflow-ID")
+
+	needAdd := false
+
 	if workflowID == "" {
-		return fmt.Errorf("missing workflow ID in message header")
+		if msg.Headers().Get("Nats-Scheduler") != "" {
+			// This is a scheduled message, which does not contain a workflow ID.
+			// We will manually assign a workflow ID for it.
+			workflowID = uuid.New().String()
+			needAdd = true
+		} else {
+			return fmt.Errorf("missing workflow ID in message header")
+		}
 	}
 
 	ctx = taskinfo.WithWorkflowID(ctx, workflowID)
+
+	// This is a scheduled message that requires an increment for the workflow counter.
+	// We use a KV entry as a lock to ensure that only one message increments the counter for this workflow,
+	if needAdd {
+		err := workflow.CreateKV(ctx, "NWQ_SCHEDULED_INCREMENTED", nil)
+		if err != nil {
+			if !errors.Is(err, jetstream.ErrKeyExists) {
+				return fmt.Errorf("failed to create workflow KV for scheduled task: %w", err)
+			}
+		} else {
+			_, err := client.Counter.AddInt(ctx, counterSubject(workflowID), 1)
+			if err != nil {
+				kvErr := client.WorkflowKV.Delete(ctx, "NWQ_SCHEDULED_INCREMENTED")
+				if kvErr != nil {
+					return fmt.Errorf(
+						"failed to delete workflow KV after counter increment failure for scheduled task: %w => %w",
+						err,
+						kvErr,
+					)
+				}
+
+				return fmt.Errorf("failed to increment counter for scheduled task: %w", err)
+			}
+		}
+	}
 
 	if t.to.dedup {
 		dedupIDRaw := t.getHash(workflowID, msg.Data())

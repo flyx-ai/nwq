@@ -8,4 +8,4 @@ run = "nats-server --jetstream --store_dir ./.cache/"
 run = "go run ./internal/main.go"
 
 [tasks.test]
-run = "go test ./internal/... --count=1"
+run = "go test ./internal/... --count=1 -v"

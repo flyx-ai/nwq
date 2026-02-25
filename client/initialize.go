@@ -44,7 +44,7 @@ func initialize(ctx context.Context, nc *nats.Conn, numReplicas int) error {
 	TaskStream, err = JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:               "nwq-tasks",
 		Description:        "Stream for NWQ tasks",
-		Subjects:           []string{"nwq.messages.>"},
+		Subjects:           []string{"nwq.messages.>", "nwq.schedules.>"},
 		Retention:          jetstream.InterestPolicy,
 		Discard:            jetstream.DiscardNew,
 		Storage:            jetstream.FileStorage,
@@ -97,6 +97,19 @@ func initialize(ctx context.Context, nc *nats.Conn, numReplicas int) error {
 	Counter, err = counters.NewCounterFromStream(JS, CounterStream)
 	if err != nil {
 		return fmt.Errorf("failed to create counter from TaskStream: %w", err)
+	}
+
+	// maybe extend this in case this server runs for >100 years
+	pauseUntil := time.Now().Add(100 * 365 * 24 * time.Hour)
+	_, err = TaskStream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Name:          "nwq-schedule-dummy-subscriber",
+		Durable:       "nwq-schedule-dummy-subscriber",
+		Description:   "Dummy subscriber to ensure that scheduled messages are not lost",
+		FilterSubject: "nwq.schedules.>",
+		PauseUntil:    &pauseUntil,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create or update dummy consumer: %w", err)
 	}
 
 	return nil
